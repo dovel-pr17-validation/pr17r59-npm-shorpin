@@ -1,0 +1,35 @@
+name: Size
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: preactjs/compressed-size-action@f322c295dde06a1cb7ccaef105732dd8a726d1d9 # 2.10.0
+        id: size
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          install-script: pnpm install --frozen-lockfile
+          build-script: build
+          strip-hash: "-[A-Za-z0-9_-]{8}(?=\\.)"
+          pattern: "./build/client/**/*.{js,css}"
+
+      # Dependabot PRs get a read-only token, so the comment above fails.
+      # The job summary needs no permissions and works for every PR.
+      - name: Write size report to job summary
+        if: always() && steps.size.outputs.comment-body != ''
+        run: echo "$BODY" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BODY: ${{ steps.size.outputs.comment-body }}

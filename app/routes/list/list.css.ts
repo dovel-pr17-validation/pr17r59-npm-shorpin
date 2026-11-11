@@ -1,0 +1,58 @@
+import { fallbackVar, style } from "@vanilla-extract/css";
+import { vars } from "~/styles/theme.css";
+
+export const form = style({
+  display: "grid",
+  gridColumn: "1 / -1",
+  gridRow: "content / -1",
+  gridTemplateRows: "subgrid",
+  gridTemplateColumns: "subgrid",
+  overflow: "hidden",
+});
+
+export const undoButton = style({
+  gridColumnStart: "input",
+  gridColumnEnd: "done",
+  marginLeft: "auto",
+});
+
+export const actions = style({
+  gridColumn: "content",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "1em",
+  minWidth: 0,
+});
+
+// Inline, borderless "add item" input — the distinctive list treatment.
+export const addInput = style({
+  flex: 1,
+  // Inputs have an intrinsic width from their default `size`; let it shrink.
+  minWidth: 0,
+  paddingBlock: vars.spacing.sm,
+  paddingInline: vars.spacing.md,
+  fontSize: vars.fontSize.md,
+  fontFamily: "inherit",
+  border: fallbackVar(vars.style.inputBorder, "none"),
+  background: "white",
+  color: "black",
+});
+
+// Pill "Add" button. Layered over Button's primary variant (which loads first),
+// so these visual overrides win — same pattern as item.css `tick`.
+export const addButton = style({
+  background: vars.palette.text,
+  color: "white",
+  borderRadius: vars.style.pillRadius,
+  paddingInline: vars.spacing.lg,
+  fontSize: vars.fontSize.md,
+  fontWeight: vars.fontWeight.semibold,
+});
+
+export const topActions = style({
+  gridRow: "breadcrumbs",
+  gridColumn: "content",
+  justifySelf: "end",
+  display: "flex",
+  gap: vars.spacing.sm,
+});

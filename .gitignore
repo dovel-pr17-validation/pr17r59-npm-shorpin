@@ -1,0 +1,21 @@
+node_modules
+
+/.cache
+.env
+.env.test.local
+.react-router
+
+# Local Netlify folder
+.netlify
+test-results
+playwright-report
+.DS_Store
+public/mockServiceWorker.js
+build/
+supabase/.temp/
+
+# Sentry Config File
+.env.sentry-build-plugin
+
+# mkcert-generated local dev certs (per-machine, contain private keys — see serve:https)
+.certs

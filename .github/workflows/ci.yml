@@ -1,0 +1,367 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  secret-preflight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      E2E_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+      E2E_SUPABASE_ANON_KEY: ${{ secrets.E2E_SUPABASE_ANON_KEY }}
+      E2E_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+      E2E_SUPABASE_DB_PASSWORD: ${{ secrets.E2E_SUPABASE_DB_PASSWORD }}
+    steps:
+      - name: Check required Supabase secrets
+        id: check
+        shell: bash
+        run: |
+          missing=()
+
+          [ -z "$E2E_SUPABASE_URL" ] && missing+=("E2E_SUPABASE_URL")
+          [ -z "$E2E_SUPABASE_ANON_KEY" ] && missing+=("E2E_SUPABASE_ANON_KEY")
+          [ -z "$E2E_SUPABASE_SERVICE_ROLE_KEY" ] && missing+=("E2E_SUPABASE_SERVICE_ROLE_KEY")
+          # Only needed to migrate the e2e project, which Dependabot PRs skip
+          # (they never add migrations), so it isn't in the Dependabot store.
+          if [ "$GITHUB_ACTOR" != "dependabot[bot]" ]; then
+            [ -z "$E2E_SUPABASE_DB_PASSWORD" ] && missing+=("E2E_SUPABASE_DB_PASSWORD")
+          fi
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            {
+              echo "missing_md<<'EOF'"
+              for secret in "${missing[@]}"; do
+                echo "- \`$secret\`"
+              done
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+
+            for secret in "${missing[@]}"; do
+              echo "::error title=Missing required secret::$secret is not configured"
+            done
+
+            {
+              echo "## ❌ Missing required Supabase secrets"
+              for secret in "${missing[@]}"; do
+                echo "- \`$secret\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            exit 1
+          fi
+
+          echo "## ✅ Required Supabase secrets are configured" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post PR comment when secrets are missing
+        if: failure() && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@v9
+        env:
+          MISSING_MD: ${{ steps.check.outputs.missing_md }}
+        with:
+          script: |
+            const marker = '<!-- secret-preflight -->'
+            const isDependabot = context.actor === 'dependabot[bot]'
+            const dependabotNote = isDependabot
+              ? `\n\nThis is expected for Dependabot PRs: workflow runs triggered by \`dependabot[bot]\` only receive Dependabot secrets, not repository Actions secrets. Add the missing secrets under Settings → Secrets and variables → Dependabot, then re-run the failed jobs.`
+              : ''
+            const body = `${marker}
+            ⚠️ CI secret preflight failed.
+
+            Missing required Supabase secrets:
+            ${process.env.MISSING_MD}${dependabotNote}`
+
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker),
+            )
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              })
+            }
+
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm verify
+
+      - run: pnpm vitest run
+
+  playwright-version:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: mcr.microsoft.com/playwright:v${{ steps.version.outputs.version }}-noble
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: version
+        run: echo "version=$(node -p "require('./package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+
+  integration:
+    if: github.event_name == 'pull_request'
+    needs: playwright-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: ${{ needs.playwright-version.outputs.image }}
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test:integration
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Deploy report to GitHub Pages
+        if: failure()
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./playwright-report
+
+      - name: Link to report
+        if: failure()
+        run: echo "### [View Playwright Report](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/)" >> $GITHUB_STEP_SUMMARY
+
+  e2e-supabase:
+    if: github.event_name == 'pull_request'
+    needs: playwright-version
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.playwright-version.outputs.image }}
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Push pending migrations to the e2e project
+        # Dependabot PRs only bump dependencies, never add migrations, so they
+        # test against the schema maintainers' PRs have already pushed — and
+        # E2E_SUPABASE_DB_PASSWORD is deliberately kept out of the Dependabot
+        # secrets store.
+        if: github.actor != 'dependabot[bot]'
+        # The PR's own migrations, so the tests below run against the schema
+        # the PR's code expects (prod only migrates on main, in migrate-prod).
+        # Same connection as migrate-prod — see its comments for why it's
+        # --db-url via the Supavisor session pooler. The pooler host is
+        # region-specific: set the E2E_SUPABASE_POOLER_HOST repository
+        # variable if the e2e project isn't in the same region as prod.
+        #
+        # Migrations from a PR that's later closed unmerged stay applied
+        # here. That's tolerable only because this project never holds real
+        # data (see README "CI secrets on Dependabot PRs").
+        #
+        # The project ref is the subdomain of the hosted project URL
+        # (https://<ref>.supabase.co), so it needs no secret of its own.
+        #
+        # node, not jq, for the URL-encoding: jq isn't in the Playwright
+        # container image this job runs in.
+        run: |
+          project_ref=$(node -e 'process.stdout.write(new URL(process.env.SUPABASE_URL).hostname.split(".")[0])')
+          encoded_password=$(node -e 'process.stdout.write(encodeURIComponent(process.env.SUPABASE_DB_PASSWORD))')
+          pnpm exec supabase db push --db-url "postgresql://postgres.${project_ref}:${encoded_password}@${SUPABASE_POOLER_HOST}:5432/postgres"
+        env:
+          SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.E2E_SUPABASE_DB_PASSWORD }}
+          SUPABASE_POOLER_HOST: ${{ vars.E2E_SUPABASE_POOLER_HOST || 'aws-1-eu-west-1.pooler.supabase.com' }}
+
+      - run: pnpm test:e2e
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.E2E_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+          VITE_GIT_HASH: ${{ github.sha }}
+          VITE_GIT_DATE: ${{ github.event.head_commit.timestamp }}
+          VITE_PR_NUMBER: ${{ github.event.number }}
+          VITE_BRANCH: ${{ github.ref_name }}
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report-supabase
+          path: playwright-report/
+          retention-days: 7
+
+  migrate-prod:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Push pending migrations
+        # supabase link's project-linking step calls an API that has a known
+        # CLI parsing bug (github.com/supabase/cli/issues/4775-adjacent —
+        # SchemaError on inserted_at) as of CLI 2.108-2.112. --db-url talks to
+        # Postgres directly and sidesteps that endpoint entirely.
+        #
+        # Uses `pnpm exec supabase` rather than the `db:push` package.json
+        # script: pnpm always inserts a literal `--` before args forwarded to
+        # a script (`pnpm db:push -- --db-url ...`), which the Supabase CLI's
+        # flag parser treats as "end of flags", so --db-url is parsed as a
+        # positional arg instead of a flag and silently ignored.
+        #
+        # Connects via the Supavisor session pooler (port 5432, username
+        # postgres.<project-ref>) rather than the direct db.<ref>.supabase.co
+        # host: the direct host is IPv6-only, and GitHub-hosted runners don't
+        # support outbound IPv6, so a direct connection fails with "network
+        # is unreachable". Session mode (not the transaction pooler on 6543)
+        # is required here: the transaction pooler multiplexes connections
+        # across shared backends, and the CLI's migration runner uses
+        # prepared statements, which collide across pooled connections
+        # ("prepared statement already exists", SQLSTATE 42P05).
+        run: |
+          encoded_password=$(jq -rn --arg v "$SUPABASE_DB_PASSWORD" '$v|@uri')
+          pnpm exec supabase db push --db-url "postgresql://postgres.${SUPABASE_PROJECT_REF}:${encoded_password}@aws-1-eu-west-1.pooler.supabase.com:5432/postgres"
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: migrate-prod
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Resolve PR number for commit
+        run: |
+          PR_NUMBER=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            | jq -r '.[0].number // ""')
+          echo "VITE_PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+            VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+            VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
+            VITE_GIT_HASH=${{ github.sha }}
+            VITE_GIT_DATE=${{ github.event.head_commit.timestamp }}
+            VITE_PR_NUMBER=${{ env.VITE_PR_NUMBER }}
+            VITE_BRANCH=${{ github.ref_name }}
+
+      - name: Trigger Coolify deploy
+        run: |
+          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}" \
+            -w "\nHTTP Status: %{http_code}\n" \
+            -f
+
+      - name: Smoke test deploy
+        run: |
+          for i in $(seq 1 30); do
+            deployed=$(curl -fsS https://shorpin.matthewbalaam.co.uk/version | jq -r .hash)
+            [ "$deployed" = "${{ github.sha }}" ] && break
+            sleep 5
+          done
+          [ "$deployed" = "${{ github.sha }}" ] || { echo "::error::still on $deployed, expected ${{ github.sha }}"; exit 1; }
+
+          status=$(curl -s -o /tmp/body.txt -w '%{http_code}' -X POST https://shorpin.matthewbalaam.co.uk/login \
+            -H "Origin: https://shorpin.matthewbalaam.co.uk" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "email=smoketest@example.com" \
+            --data-urlencode "password=smoke-test")
+          if [ "$status" = "400" ] && grep -q "Bad Request" /tmp/body.txt; then
+            echo "::error::action-origin check is rejecting real requests (proxy/Origin misconfig)"
+            exit 1
+          fi

@@ -1,0 +1,41 @@
+{
+  "editor.formatOnSave": true,
+  "ts.tsdk": "node_modules/typescript/lib",
+  "ts.experimental.useTsgo": true,
+  "ts.enablePromptUseWorkspaceTsdk": true,
+  "oxc.enabled": true,
+  "mdx.server.enabled": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "always"
+  },
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+
+  "cSpell.words": [
+    "apikey",
+    "Buildx",
+    "collab",
+    "Coolify",
+    "oxfmt",
+    "oxlint",
+    "peaceiris",
+    "picklist",
+    "polypane",
+    "Reorderable",
+    "Revalidator",
+    "shorpin",
+    "subgrid",
+    "supabase",
+    "Teardown",
+    "tsgo",
+    "VITE",
+    "vitest",
+    "waitlist"
+  ],
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode"
+  },
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
+}

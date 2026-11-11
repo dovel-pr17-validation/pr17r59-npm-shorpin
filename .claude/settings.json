@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(pnpm install *)",
+      "Bash(git push *)",
+      "Bash(git remote *)",
+      "Bash(gh pr *)",
+      "Bash(pnpm add *)",
+      "Bash(zsh -c 'which node; which pnpm; node -v; pnpm -v')",
+      "Read(//private/tmp/claude-502/**)",
+      "Bash(lsof -i :5174 -sTCP:LISTEN)",
+      "Bash(lsof -i :5173 -sTCP:LISTEN)",
+      "Bash(lsof -iTCP -sTCP:LISTEN -P)",
+      "Bash(ps -u matthewbalaam -o pid,command)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-commit-checks.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-edit-checks.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
